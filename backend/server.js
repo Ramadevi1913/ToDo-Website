@@ -1,3 +1,6 @@
+// backend/server.js
+// FINAL CORRECTED version with syntax error fixed.
+
 // --- 0. IMPORT TOOLS ---
 const express = require('express');
 const http = require('http');
@@ -52,8 +55,6 @@ const TaskSchema = new mongoose.Schema({
 const Task = mongoose.model('Task', TaskSchema);
 
 // --- 6. AUTHENTICATION LOGIC ---
-
-// Correctly determine the callback URL
 const callbackURL = process.env.NODE_ENV === 'production'
   ? `${process.env.RENDER_EXTERNAL_URL}/api/auth/google/callback`
   : `http://localhost:${process.env.PORT || 5000}/api/auth/google/callback`;
@@ -73,7 +74,6 @@ passport.use(new GoogleStrategy({
     try {
       let user = await User.findOne({ email: profile.emails[0].value });
       if (user) {
-        // If user exists but maybe signed up with email first, update their googleId and image
         user.googleId = profile.id;
         user.image = profile.photos[0].value;
         await user.save();
@@ -99,51 +99,112 @@ const authMiddleware = (req, res, next) => {
 
 // --- 7. API ROUTES ---
 const authRouter = express.Router();
+const tasksRouter = express.Router();
 
+// AUTH: Register
 authRouter.post('/register', async (req, res) => {
-    // ... same code
+    const { displayName, email, password } = req.body;
+    try {
+        let user = await User.findOne({ email });
+        if (user) return res.status(400).json({ msg: 'User with this email already exists' });
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+        const defaultImage = `https://api.dicebear.com/7.x/initials/svg?seed=${displayName.replace(' ','+')}`;
+        user = new User({ displayName, email, password: hashedPassword, image: defaultImage });
+        await user.save();
+        const payload = { user: { id: user.id } };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        res.status(201).json({ token });
+    } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
 });
+
+// AUTH: Login
 authRouter.post('/login', async (req, res) => {
-    // ... same code
+    const { email, password } = req.body;
+    try {
+        const user = await User.findOne({ email });
+        if (!user || !user.password) return res.status(400).json({ msg: 'Invalid credentials or please use Google Login' });
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
+        const payload = { user: { id: user.id } };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
+        res.json({ token });
+    } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
 });
 
+// AUTH: Google
 authRouter.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-
-// REFACTORED AND CORRECTED GOOGLE CALLBACK
 authRouter.get('/google/callback', (req, res, next) => {
   passport.authenticate('google', { session: false }, (err, user, info) => {
     if (err || !user) {
-      // If there's an error or user is not found, redirect to a failure page on frontend
       return res.redirect(`${process.env.CLIENT_URL}/login?error=auth_failed`);
     }
-    // If authentication is successful, create a token
     const payload = { user: { id: user.id } };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
-    // Redirect to a success page on frontend with the token in the URL
     return res.redirect(`${process.env.CLIENT_URL}/login/success?token=${token}`);
   })(req, res, next);
 });
 
-app.use('/api/auth', authRouter);
+// USER: Get Me
 app.get('/api/user/me', authMiddleware, async (req, res) => {
-    // ... same code
+    try {
+        const user = await User.findById(req.user.id).select('-password -googleId');
+        res.json(user);
+    } catch(err) { console.error(err.message); res.status(500).send('Server Error'); }
 });
 
-const tasksRouter = express.Router();
-tasksRouter.get('/', authMiddleware, async (req, res) => { /*...*/ });
-tasksRouter.post('/', authMiddleware, async (req, res) => { /*...*/ });
-tasksRouter.put('/:id', authMiddleware, async (req, res) => { /*...*/ });
-tasksRouter.delete('/:id', authMiddleware, async (req, res) => { /*...*/ });
-app.use('/api/tasks', tasksRouter);
+// TASKS: Get All
+tasksRouter.get('/', authMiddleware, async (req, res) => {
+    try {
+        const tasks = await Task.find({ owner: req.user.id }).sort({ createdAt: -1 });
+        res.json(tasks);
+    } catch(err) { console.error(err.message); res.status(500).send("Server Error"); }
+});
 
-// For completeness, re-pasting the full route functions again
-authRouter.post('/register', async (req, res) => { const { displayName, email, password } = req.body; try { let user = await User.findOne({ email }); if (user) return res.status(400).json({ msg: 'User with this email already exists' }); const salt = await bcrypt.genSalt(10); const hashedPassword = await bcrypt.hash(password, salt); const defaultImage = `https://api.dicebear.com/7.x/initials/svg?seed=${displayName.replace(' ','+')}`; user = new User({ displayName, email, password: hashedPassword, image: defaultImage }); await user.save(); const payload = { user: { id: user.id } }; const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' }); res.status(201).json({ token }); } catch (err) { console.error(err.message); res.status(500).send('Server Error') } });
-authRouter.post('/login', async (req, res) => { const { email, password } = req.body; try { const user = await User.findOne({ email }); if (!user || !user.password) return res.status(400).json({ msg: 'Invalid credentials or please use Google Login' }); const isMatch = await bcrypt.compare(password, user.password); if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' }); const payload = { user: { id: user.id } }; const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' }); res.json({ token }); } catch (err) { console.error(err.message); res.status(500).send('Server Error') } });
-app.get('/api/user/me', authMiddleware, async (req, res) => { try { const user = await User.findById(req.user.id).select('-password -googleId'); res.json(user); } catch(err) { console.error(err.message); res.status(500).send('Server Error'); } });
-tasksRouter.get('/', authMiddleware, async (req, res) => { try { const tasks = await Task.find({ owner: req.user.id }).sort({ createdAt: -1 }); res.json(tasks); } catch(err) { console.error(err.message); res.status(500).send("Server Error"); } });
-tasksRouter.post('/', authMiddleware, async (req, res) => { try { if (!req.body.title) return res.status(400).json({msg: 'Title is required'}); const newTask = new Task({ title: req.body.title, owner: req.user.id }); await newTask.save(); req.io.emit('tasks_updated'); res.status(201).json(newTask); } catch (err) { console.error(err.message); res.status(500).send('Server Error'); } });
-tasksRouter.put('/:id', authMiddleware, async (req, res) => { try { let task = await Task.findById(req.params.id); if (!task) return res.status(404).json({ msg: 'Task not found' }); if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'Not authorized' }); const { title, status } = req.body; if (title) task.title = title; if (status) task.status = status; await task..save(); req.io.emit('tasks_updated'); res.json(task); } catch (err) { console.error(err.message); res.status(500).send('Server Error'); } });
-tasksRouter.delete('/:id', authMiddleware, async (req, res) => { try { const task = await Task.findById(req.params.id); if (!task) return res.status(404).json({ msg: 'Task not found' }); if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'User not authorized' }); await Task.findByIdAndDelete(req.params.id); req.io.emit('tasks_updated'); res.json({ msg: 'Task removed' }); } catch (err) { console.error(err.message); res.status(500).send('Server Error'); } });
+// TASKS: Create
+tasksRouter.post('/', authMiddleware, async (req, res) => {
+    try {
+        if (!req.body.title) return res.status(400).json({msg: 'Title is required'});
+        const newTask = new Task({ title: req.body.title, owner: req.user.id });
+        await newTask.save();
+        req.io.emit('tasks_updated');
+        res.status(201).json(newTask);
+    } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
+});
+
+// TASKS: Update (PUT)
+tasksRouter.put('/:id', authMiddleware, async (req, res) => {
+    try {
+        let task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ msg: 'Task not found' });
+        if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'Not authorized' });
+
+        const { title, status } = req.body;
+        if (title) task.title = title;
+        if (status) task.status = status;
+        
+        await task.save(); // THE CORRECTED LINE WITH ONE DOT
+        
+        req.io.emit('tasks_updated');
+        res.json(task);
+    } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
+});
+
+// TASKS: Delete
+tasksRouter.delete('/:id', authMiddleware, async (req, res) => {
+    try {
+        const task = await Task.findById(req.params.id);
+        if (!task) return res.status(404).json({ msg: 'Task not found' });
+        if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'User not authorized' });
+        await Task.findByIdAndDelete(req.params.id);
+        req.io.emit('tasks_updated');
+        res.json({ msg: 'Task removed' });
+    } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
+});
+
+// Use the routers
+app.use('/api/auth', authRouter);
+app.use('/api/tasks', tasksRouter);
 
 // --- 8. START SERVER ---
 const PORT = process.env.PORT || 5000;
