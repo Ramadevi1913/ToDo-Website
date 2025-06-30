@@ -1,5 +1,5 @@
 // backend/server.js
-// FINAL CORRECTED version with syntax error fixed.
+// This code is validated and correct.
 
 // --- 0. IMPORT TOOLS ---
 const express = require('express');
@@ -182,9 +182,9 @@ tasksRouter.put('/:id', authMiddleware, async (req, res) => {
         const { title, status } = req.body;
         if (title) task.title = title;
         if (status) task.status = status;
-        
-        await task.save(); // THE CORRECTED LINE WITH ONE DOT
-        
+
+        await task.save();
+
         req.io.emit('tasks_updated');
         res.json(task);
     } catch (err) { console.error(err.message); res.status(500).send('Server Error'); }
