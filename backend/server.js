@@ -1,7 +1,3 @@
-// backend/server.js
-// This is the COMPLETE and FINAL version with robust and tested API logic.
-
-// --- 0. IMPORT TOOLS ---
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
@@ -15,21 +11,20 @@ const bcrypt = require('bcryptjs');
 
 dotenv.config();
 
-// --- 1. INITIALIZE APP & SERVER ---
 const app = express();
 const server = http.createServer(app);
 
-// --- 2. CONNECT TO DATABASE ---
+
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB connected successfully!'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// --- 3. SET UP MIDDLEWARES ---
+
 app.use(cors({ origin: process.env.CLIENT_URL }));
 app.use(express.json());
 app.use(passport.initialize());
 
-// --- 4. SOCKET.IO (REAL-TIME) SETUP ---
+
 const io = new Server(server, { cors: { origin: process.env.CLIENT_URL } });
 app.use((req, res, next) => {
   req.io = io;
@@ -37,7 +32,7 @@ app.use((req, res, next) => {
 });
 io.on('connection', (socket) => console.log('🔌 A user connected via WebSocket'));
 
-// --- 5. DATABASE "BLUEPRINTS" (SCHEMAS) ---
+
 const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     displayName: { type: String, required: true },
@@ -54,11 +49,15 @@ const TaskSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Task = mongoose.model('Task', TaskSchema);
 
-// --- 6. AUTHENTICATION LOGIC ---
+
+const callbackURL = process.env.RENDER_EXTERNAL_URL
+  ? `${process.env.RENDER_EXTERNAL_URL}/api/auth/google/callback`
+  : `http://localhost:${process.env.PORT || 5000}/api/auth/google/callback`;
+
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: '/api/auth/google/callback',
+    callbackURL: callbackURL, 
     proxy: true
   },
   async (accessToken, refreshToken, profile, done) => {
@@ -90,10 +89,8 @@ const authMiddleware = (req, res, next) => {
     } catch (e) { res.status(400).json({ msg: 'Token is not valid' }); }
 };
 
-// --- 7. DEFINE ALL OUR API ROUTES ---
-
-// ---> AUTHENTICATION ROUTES <---
 const authRouter = express.Router();
+
 authRouter.post('/register', async (req, res) => {
     const { displayName, email, password } = req.body;
     try {
@@ -107,8 +104,12 @@ authRouter.post('/register', async (req, res) => {
         const payload = { user: { id: user.id } };
         const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
         res.status(201).json({ token });
-    } catch (err) { res.status(500).send('Server Error') }
+    } catch (err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error') 
+    }
 });
+
 authRouter.post('/login', async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -119,8 +120,13 @@ authRouter.post('/login', async (req, res) => {
         const payload = { user: { id: user.id } };
         const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
         res.json({ token });
-    } catch (err) { res.status(500).send('Server Error') }
+    } catch (err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error') 
+    }
 });
+
+
 authRouter.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 authRouter.get('/google/callback',
   passport.authenticate('google', { session: false, failureRedirect: process.env.CLIENT_URL }),
@@ -132,22 +138,29 @@ authRouter.get('/google/callback',
 );
 app.use('/api/auth', authRouter);
 
-// ---> USER INFO ROUTE <---
+
 app.get('/api/user/me', authMiddleware, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('-password -googleId');
         res.json(user);
-    } catch(err) { res.status(500).send('Server Error'); }
+    } catch(err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error'); 
+    }
 });
 
-// ---> TASK ROUTES (ROBUST VERSIONS) <---
 const tasksRouter = express.Router();
+
 tasksRouter.get('/', authMiddleware, async (req, res) => {
     try {
         const tasks = await Task.find({ owner: req.user.id }).sort({ createdAt: -1 });
         res.json(tasks);
-    } catch(err) { res.status(500).send("Server Error"); }
+    } catch(err) { 
+        console.error(err.message);
+        res.status(500).send("Server Error"); 
+    }
 });
+
 tasksRouter.post('/', authMiddleware, async (req, res) => {
     try {
         if (!req.body.title) return res.status(400).json({msg: 'Title is required'});
@@ -155,10 +168,13 @@ tasksRouter.post('/', authMiddleware, async (req, res) => {
         await newTask.save();
         req.io.emit('tasks_updated');
         res.status(201).json(newTask);
-    } catch (err) {
-        res.status(500).send('Server Error');
+    } catch (err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error'); 
     }
 });
+
+
 tasksRouter.put('/:id', authMiddleware, async (req, res) => {
     try {
         const task = await Task.findById(req.params.id);
@@ -166,34 +182,37 @@ tasksRouter.put('/:id', authMiddleware, async (req, res) => {
         if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'Not authorized' });
 
         const { title, status } = req.body;
-        const updateFields = {};
         if (title) task.title = title;
         if (status) task.status = status;
         
-        const updatedTask = await task.save();
+        await task.save();
         
         req.io.emit('tasks_updated');
-        res.json(updatedTask);
-    } catch (err) {
-        res.status(500).send('Server Error');
+        res.json(task);
+    } catch (err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error'); 
     }
 });
+
+
 tasksRouter.delete('/:id', authMiddleware, async (req, res) => {
     try {
         const task = await Task.findById(req.params.id);
         if (!task) return res.status(404).json({ msg: 'Task not found' });
         if (task.owner.toString() !== req.user.id) return res.status(401).json({ msg: 'User not authorized' });
         
-        await task.remove();
+        await Task.findByIdAndDelete(req.params.id);
         
         req.io.emit('tasks_updated');
         res.json({ msg: 'Task removed' });
-    } catch (err) {
-        res.status(500).send('Server Error');
+    } catch (err) { 
+        console.error(err.message);
+        res.status(500).send('Server Error'); 
     }
 });
+
 app.use('/api/tasks', tasksRouter);
 
-// --- 8. START SERVER ---
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Backend server is flying on port ${PORT}`));
